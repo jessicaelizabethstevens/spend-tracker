@@ -1,0 +1,161 @@
+<div>
+  <h2 class="sr-only">Daily spend tracker for logging purchases by category to build real spending data</h2>
+  <div id="app"></div>
+</div>
+
+<script src="https://esm.sh/react@18.2.0" type="module"></script>
+<script type="module">
+const CATEGORIES = [
+  { id: 'walmart', label: 'Walmart', ramp: 'blue' },
+  { id: 'murphy', label: 'Murphy snacks', ramp: 'amber' },
+  { id: 'online', label: 'Online shopping', ramp: 'pink' },
+  { id: 'gas', label: 'Gas (Q7 TDI)', ramp: 'teal' },
+  { id: 'food', label: 'Food / dining', ramp: 'coral' },
+  { id: 'other', label: 'Other', ramp: 'gray' },
+];
+
+const RAMP_HEX = {
+  blue: '#378ADD', amber: '#BA7517', pink: '#D4537E',
+  teal: '#1D9E75', coral: '#D85A30', gray: '#888780',
+};
+
+const todayStr = () => new Date().toISOString().slice(0, 10);
+const fmt = (n) => `$${n.toFixed(2)}`;
+
+let entries = [];
+let category = 'walmart';
+let saveState = 'idle';
+
+const app = document.getElementById('app');
+
+async function loadEntries() {
+  try {
+    const result = await window.storage.get('spend-entries');
+    if (result && result.value) entries = JSON.parse(result.value);
+  } catch (e) { /* none yet */ }
+  render();
+}
+
+async function persist() {
+  saveState = 'saving';
+  try {
+    const result = await window.storage.set('spend-entries', JSON.stringify(entries));
+    saveState = result ? 'idle' : 'error';
+  } catch (e) {
+    saveState = 'error';
+  }
+  render();
+}
+
+function addEntry() {
+  const amountInput = document.getElementById('amount-input');
+  const noteInput = document.getElementById('note-input');
+  const num = parseFloat(amountInput.value);
+  if (!num || num <= 0) return;
+  entries = [{ id: Date.now().toString(36), date: todayStr(), amount: num, category, note: noteInput.value.trim() }, ...entries];
+  amountInput.value = '';
+  noteInput.value = '';
+  render();
+  persist();
+}
+
+function removeEntry(id) {
+  entries = entries.filter((e) => e.id !== id);
+  render();
+  persist();
+}
+
+function setCategory(id) {
+  category = id;
+  render();
+}
+
+function getStats() {
+  const monthKey = new Date().toISOString().slice(0, 7);
+  const thisMonth = entries.filter((e) => e.date.startsWith(monthKey));
+  const total = thisMonth.reduce((s, e) => s + e.amount, 0);
+  const byCat = {};
+  CATEGORIES.forEach((c) => (byCat[c.id] = 0));
+  thisMonth.forEach((e) => { byCat[e.category] = (byCat[e.category] || 0) + e.amount; });
+  const days = new Set(thisMonth.map((e) => e.date)).size;
+  return { total, byCat, count: thisMonth.length, avgPerDay: days > 0 ? total / days : 0 };
+}
+
+function render() {
+  const stats = getStats();
+  const maxCat = Math.max(1, ...Object.values(stats.byCat));
+
+  const summaryRows = CATEGORIES.filter((c) => stats.byCat[c.id] > 0).map((c) => `
+    <div style="display:flex;align-items:center;gap:8px;">
+      <span style="font-size:12px;width:100px;color:var(--color-text-secondary);flex-shrink:0;">${c.label}</span>
+      <div style="flex:1;height:6px;background:var(--color-background-tertiary);border-radius:3px;overflow:hidden;">
+        <div style="width:${(stats.byCat[c.id] / maxCat) * 100}%;height:100%;background:${RAMP_HEX[c.ramp]};border-radius:3px;"></div>
+      </div>
+      <span style="font-size:12px;width:56px;text-align:right;">${fmt(stats.byCat[c.id])}</span>
+    </div>
+  `).join('') || `<p style="font-size:13px;color:var(--color-text-tertiary);margin:0;">Nothing logged yet this month — add your first one below.</p>`;
+
+  const categoryPills = CATEGORIES.map((c) => {
+    const active = category === c.id;
+    const hex = RAMP_HEX[c.ramp];
+    return `<button data-cat="${c.id}" class="cat-pill" style="padding:6px 12px;border-radius:20px;font-size:12.5px;font-weight:500;border:1.5px solid ${active ? hex : 'var(--color-border-tertiary)'};background:${active ? hex + '1A' : 'transparent'};color:${active ? hex : 'var(--color-text-secondary)'};cursor:pointer;">${c.label}</button>`;
+  }).join('');
+
+  const entryRows = entries.slice(0, 30).map((e) => {
+    const cat = CATEGORIES.find((c) => c.id === e.category) || CATEGORIES[CATEGORIES.length - 1];
+    const hex = RAMP_HEX[cat.ramp];
+    return `
+      <div style="display:flex;align-items:center;gap:10px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:9px 12px;">
+        <span style="width:8px;height:8px;border-radius:50%;background:${hex};flex-shrink:0;"></span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13.5px;font-weight:500;">${cat.label}</div>
+          ${e.note ? `<div style="font-size:11.5px;color:var(--color-text-tertiary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${e.note}</div>` : ''}
+        </div>
+        <span style="font-size:11px;color:var(--color-text-tertiary);flex-shrink:0;">${e.date.slice(5)}</span>
+        <span style="font-size:14px;font-weight:500;flex-shrink:0;min-width:56px;text-align:right;">${fmt(e.amount)}</span>
+        <button data-del="${e.id}" class="del-btn" aria-label="Delete entry" style="background:none;border:none;color:var(--color-text-tertiary);font-size:16px;cursor:pointer;padding:0 2px;line-height:1;">×</button>
+      </div>
+    `;
+  }).join('') || `<p style="font-size:13px;color:var(--color-text-tertiary);">Nothing yet. First entry starts your real data.</p>`;
+
+  app.innerHTML = `
+    <div style="max-width:480px;margin:0 auto;">
+      <div style="background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:18px 20px;margin-bottom:16px;">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px;">
+          <span style="font-size:12px;color:var(--color-text-tertiary);letter-spacing:0.4px;text-transform:uppercase;">This month so far</span>
+          <span style="font-size:11px;color:var(--color-text-tertiary);">${stats.count} ${stats.count === 1 ? 'entry' : 'entries'} · ${fmt(stats.avgPerDay)}/day avg</span>
+        </div>
+        <div style="font-size:32px;font-weight:500;margin-bottom:14px;">${fmt(stats.total)}</div>
+        <div style="display:flex;flex-direction:column;gap:7px;">${summaryRows}</div>
+      </div>
+
+      <div style="background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:16px;margin-bottom:16px;">
+        <div style="display:flex;gap:8px;margin-bottom:10px;">
+          <div style="position:relative;flex:1;">
+            <span style="position:absolute;left:12px;top:9px;color:var(--color-text-tertiary);font-size:15px;">$</span>
+            <input id="amount-input" type="number" inputmode="decimal" placeholder="0.00" style="width:100%;box-sizing:border-box;padding-left:24px;" />
+          </div>
+          <button id="add-btn" style="background:var(--color-background-info);color:var(--color-text-info);border:0.5px solid var(--color-border-info);font-weight:500;padding:0 18px;">Add</button>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;">${categoryPills}</div>
+        <input id="note-input" type="text" placeholder="Note (optional) — e.g. 'stressed after work'" style="width:100%;box-sizing:border-box;" />
+        <div style="font-size:10.5px;color:${saveState === 'error' ? 'var(--color-text-danger)' : 'var(--color-text-tertiary)'};margin-top:6px;min-height:14px;">
+          ${saveState === 'saving' ? 'Saving…' : ''}${saveState === 'error' ? 'Could not save — try again' : ''}
+        </div>
+      </div>
+
+      <div>
+        <h3 style="font-size:13px;font-weight:500;color:var(--color-text-secondary);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px;">Recent entries</h3>
+        <div style="display:flex;flex-direction:column;gap:6px;">${entryRows}</div>
+      </div>
+    </div>
+  `;
+
+  document.getElementById('add-btn').addEventListener('click', addEntry);
+  document.querySelectorAll('.cat-pill').forEach((btn) => btn.addEventListener('click', () => setCategory(btn.dataset.cat)));
+  document.querySelectorAll('.del-btn').forEach((btn) => btn.addEventListener('click', () => removeEntry(btn.dataset.del)));
+  document.getElementById('amount-input').addEventListener('keydown', (e) => { if (e.key === 'Enter') addEntry(); });
+}
+
+loadEntries();
+</script>
